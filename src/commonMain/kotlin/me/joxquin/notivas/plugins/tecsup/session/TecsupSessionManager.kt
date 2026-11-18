@@ -5,6 +5,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import me.joxquin.notivas.plugins.tecsup.api.TecsupEndpoints
 import me.joxquin.notivas.plugins.tecsup.model.TecsupUser
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
 
 sealed interface TecsupSessionState {
     data object Disconnected : TecsupSessionState
@@ -33,8 +35,9 @@ class TecsupSessionManager(
         get() = _sessionState.value is TecsupSessionState.Connected
 
     suspend fun saveToken(token: String, user: TecsupUser? = null) {
-        _sessionState.value = TecsupSessionState.Connected(token, user)
-        tokenStorage?.invoke(token)
+        val cleaned = cleanToken(token)
+        _sessionState.value = TecsupSessionState.Connected(cleaned, user)
+        tokenStorage?.invoke(cleaned)
     }
 
     suspend fun markExpired() {
@@ -51,10 +54,45 @@ class TecsupSessionManager(
         tokenStorage?.invoke(null)
     }
 
-    fun extractTokenFromRedirectUri(uriString: String): String? {
-        if (!uriString.startsWith(TecsupEndpoints.REDIRECT_SCHEME)) return null
+    fun cleanToken(raw: String): String {
+        val trimmed = raw.trim()
+        if (trimmed.startsWith(TecsupEndpoints.REDIRECT_SCHEME) || trimmed.contains("idUserToken=")) {
+            extractTokenFromRedirectUri(trimmed)?.let { return it }
+        }
+        return extractTokenFromJsonOrBase64(trimmed) ?: trimmed
+    }
 
-        // Format could be: com.tecsup.uexperience://login_auth?token=XYZ or #access_token=XYZ
+    @OptIn(ExperimentalEncodingApi::class)
+    fun extractTokenFromJsonOrBase64(raw: String): String? {
+        val trimmed = raw.trim()
+        val jsonPattern = """\"token\"\s*:\s*\"([^\"]+)\"""".toRegex()
+
+        // 1. Direct JSON regex
+        jsonPattern.find(trimmed)?.groupValues?.get(1)?.let { return it }
+
+        // 2. Base64 decoded check (Default and UrlSafe)
+        for (base64Format in listOf(Base64.Default, Base64.UrlSafe)) {
+            try {
+                val decoded = base64Format.decode(trimmed).decodeToString()
+                jsonPattern.find(decoded)?.groupValues?.get(1)?.let { return it }
+                if (decoded.startsWith("eyJ") && decoded.count { it == '.' } == 2) {
+                    return decoded
+                }
+            } catch (_: Exception) {
+            }
+        }
+
+        // 3. Direct JWT check
+        if (trimmed.startsWith("eyJ") && trimmed.count { it == '.' } == 2) {
+            return trimmed
+        }
+
+        return null
+    }
+
+    fun extractTokenFromRedirectUri(uriString: String): String? {
+        if (!uriString.startsWith(TecsupEndpoints.REDIRECT_SCHEME) && !uriString.contains("idUserToken=")) return null
+
         val queryOrFragment = uriString.substringAfter("?", "").ifEmpty {
             uriString.substringAfter("#", "")
         }
@@ -65,6 +103,13 @@ class TecsupSessionManager(
             if (parts.size == 2) parts[0] to parts[1] else parts[0] to ""
         }
 
-        return params["token"] ?: params["access_token"] ?: params["suite-token"]
+        val rawToken = params["idUserToken"]
+            ?: params["token"]
+            ?: params["access_token"]
+            ?: params["suite-token"]
+            ?: params["id_token"]
+            ?: return null
+
+        return extractTokenFromJsonOrBase64(rawToken) ?: rawToken
     }
 }
