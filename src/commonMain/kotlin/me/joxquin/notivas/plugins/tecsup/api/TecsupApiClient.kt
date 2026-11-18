@@ -8,17 +8,23 @@ import io.ktor.client.plugins.logging.LogLevel
 import io.ktor.client.plugins.logging.Logging
 import io.ktor.client.request.get
 import io.ktor.client.request.header
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
 import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
+import io.ktor.http.contentType
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import me.joxquin.notivas.plugins.tecsup.model.TecsupAcademicPeriod
 import me.joxquin.notivas.plugins.tecsup.model.TecsupAttendanceItem
 import me.joxquin.notivas.plugins.tecsup.model.TecsupEvaluation
@@ -53,24 +59,64 @@ class TecsupApiClient(
         return sessionManager.currentToken ?: throw IllegalStateException("No active Tecsup session")
     }
 
-    suspend fun fetchUserInfo(): Result<TecsupUser> = runCatching {
-        val response = client.get(TecsupEndpoints.USER_INFO) {
+    suspend fun registerSession(
+        deviceId: String = "notivas-kmp",
+        brand: String = "Android",
+        model: String = "KMP",
+        osVersion: String = "14",
+        appVersion: String = "4.0.7",
+        platform: String = "Android"
+    ): Result<Unit> = runCatching {
+        client.post(TecsupEndpoints.SESSION_LOGIN) {
             header("Authorization", "Bearer ${getAuthToken()}")
+            contentType(ContentType.Application.Json)
+            setBody(
+                buildJsonObject {
+                    put("deviceId", deviceId)
+                    put("firebaseToken", "")
+                    put("brand", brand)
+                    put("model", model)
+                    put("osVersion", osVersion)
+                    put("appVersion", appVersion)
+                    put("platform", platform)
+                    put("loginTime", "2026-11-18T16:00:00Z")
+                }.toString()
+            )
         }
-        if (response.status == HttpStatusCode.Unauthorized) {
-            sessionManager.markExpired()
-            error("Session expired")
+    }
+
+    suspend fun fetchUserInfo(): Result<TecsupUser> = runCatching {
+        val token = getAuthToken()
+        val localUser = sessionManager.parseUserFromToken(token)
+
+        val response = try {
+            client.get(TecsupEndpoints.USER_INFO) {
+                header("Authorization", "Bearer $token")
+            }
+        } catch (e: Exception) {
+            if (localUser != null) return@runCatching localUser
+            throw e
         }
-        val rawJson = response.bodyAsText()
-        val obj = json.decodeFromString(JsonObject.serializer(), rawJson)
-        TecsupUser(
-            id = obj["id"]?.jsonPrimitive?.content ?: "",
-            name = obj["name"]?.jsonPrimitive?.content ?: obj["fullName"]?.jsonPrimitive?.content ?: "",
-            email = obj["email"]?.jsonPrimitive?.content ?: "",
-            studentCode = obj["studentCode"]?.jsonPrimitive?.content ?: obj["code"]?.jsonPrimitive?.content ?: "",
-            campus = obj["campus"]?.jsonPrimitive?.content ?: "",
-            career = obj["career"]?.jsonPrimitive?.content ?: ""
-        )
+
+        if (response.status == HttpStatusCode.OK) {
+            val rawJson = response.bodyAsText()
+            val obj = json.decodeFromString(JsonObject.serializer(), rawJson)
+            val remoteUser = TecsupUser(
+                id = obj["id"]?.jsonPrimitive?.content ?: localUser?.id ?: "",
+                name = obj["name"]?.jsonPrimitive?.content ?: obj["fullName"]?.jsonPrimitive?.content ?: localUser?.name ?: "",
+                email = obj["email"]?.jsonPrimitive?.content ?: localUser?.email ?: "",
+                studentCode = obj["studentCode"]?.jsonPrimitive?.content ?: obj["code"]?.jsonPrimitive?.content ?: localUser?.studentCode ?: "",
+                campus = obj["campus"]?.jsonPrimitive?.content ?: localUser?.campus ?: "Tecsup",
+                career = obj["career"]?.jsonPrimitive?.content ?: localUser?.career ?: "Estudiante"
+            )
+            sessionManager.saveToken(token, remoteUser)
+            remoteUser
+        } else {
+            localUser ?: run {
+                sessionManager.markExpired()
+                error("Session expired or invalid: ${response.status}")
+            }
+        }
     }
 
     suspend fun fetchAcademicPeriods(): Result<List<TecsupAcademicPeriod>> = runCatching {
@@ -78,8 +124,7 @@ class TecsupApiClient(
             header("Authorization", "Bearer ${getAuthToken()}")
         }
         if (response.status == HttpStatusCode.Unauthorized) {
-            sessionManager.markExpired()
-            error("Session expired")
+            error("Unauthorized")
         }
         val rawJson = response.bodyAsText()
         val array = json.decodeFromString(JsonArray.serializer(), rawJson)
@@ -100,8 +145,7 @@ class TecsupApiClient(
             header("Authorization", "Bearer ${getAuthToken()}")
         }
         if (response.status == HttpStatusCode.Unauthorized) {
-            sessionManager.markExpired()
-            error("Session expired")
+            error("Unauthorized")
         }
         val rawJson = response.bodyAsText()
         val array = json.decodeFromString(JsonArray.serializer(), rawJson)
@@ -135,8 +179,7 @@ class TecsupApiClient(
             header("Authorization", "Bearer ${getAuthToken()}")
         }
         if (response.status == HttpStatusCode.Unauthorized) {
-            sessionManager.markExpired()
-            error("Session expired")
+            error("Unauthorized")
         }
         val rawJson = response.bodyAsText()
         val array = json.decodeFromString(JsonArray.serializer(), rawJson)
@@ -167,8 +210,7 @@ class TecsupApiClient(
             header("Authorization", "Bearer ${getAuthToken()}")
         }
         if (response.status == HttpStatusCode.Unauthorized) {
-            sessionManager.markExpired()
-            error("Session expired")
+            error("Unauthorized")
         }
         val rawJson = response.bodyAsText()
         val array = json.decodeFromString(JsonArray.serializer(), rawJson)

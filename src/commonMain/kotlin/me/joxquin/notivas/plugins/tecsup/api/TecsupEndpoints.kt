@@ -7,6 +7,7 @@ object TecsupEndpoints {
     const val REDIRECT_AUTH_HOST = "login_auth"
 
     // User & Auth
+    const val SESSION_LOGIN = "api/user-api/session-info/log-in"
     const val USER_INFO = "api/user-api/user-info/v4"
     const val SUITE_TOKEN = "api/user-api/suite-token"
 

@@ -3,6 +3,11 @@ package me.joxquin.notivas.plugins.tecsup.session
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.longOrNull
 import me.joxquin.notivas.plugins.tecsup.api.TecsupEndpoints
 import me.joxquin.notivas.plugins.tecsup.model.TecsupUser
 import kotlin.io.encoding.Base64
@@ -21,7 +26,7 @@ class TecsupSessionManager(
 ) {
     private val _sessionState = MutableStateFlow<TecsupSessionState>(
         if (initialToken.isNullOrBlank()) TecsupSessionState.Disconnected
-        else TecsupSessionState.Connected(initialToken, null)
+        else TecsupSessionState.Connected(initialToken, parseUserFromToken(initialToken))
     )
     val sessionState: StateFlow<TecsupSessionState> = _sessionState.asStateFlow()
 
@@ -36,7 +41,8 @@ class TecsupSessionManager(
 
     suspend fun saveToken(token: String, user: TecsupUser? = null) {
         val cleaned = cleanToken(token)
-        _sessionState.value = TecsupSessionState.Connected(cleaned, user)
+        val resolvedUser = user ?: parseUserFromToken(cleaned)
+        _sessionState.value = TecsupSessionState.Connected(cleaned, resolvedUser)
         tokenStorage?.invoke(cleaned)
     }
 
@@ -111,5 +117,93 @@ class TecsupSessionManager(
             ?: return null
 
         return extractTokenFromJsonOrBase64(rawToken) ?: rawToken
+    }
+
+    @OptIn(ExperimentalEncodingApi::class)
+    fun parseUserFromToken(token: String): TecsupUser? {
+        val cleaned = cleanToken(token)
+        val parts = cleaned.split(".")
+        if (parts.size < 2) return null
+        val payload = parts[1]
+        val padded = when (payload.length % 4) {
+            2 -> "$payload=="
+            3 -> "$payload="
+            else -> payload
+        }
+
+        val decodedString = try {
+            Base64.UrlSafe.decode(padded).decodeToString()
+        } catch (_: Exception) {
+            try {
+                Base64.Default.decode(padded).decodeToString()
+            } catch (_: Exception) {
+                return null
+            }
+        }
+
+        return try {
+            val json = Json { ignoreUnknownKeys = true; isLenient = true }
+            val obj = json.decodeFromString(JsonObject.serializer(), decodedString)
+            val name = obj["name"]?.jsonPrimitive?.content
+                ?: run {
+                    val given = obj["given_name"]?.jsonPrimitive?.content.orEmpty()
+                    val family = obj["family_name"]?.jsonPrimitive?.content.orEmpty()
+                    "$given $family".trim()
+                }.ifEmpty { "Estudiante Tecsup" }
+
+            val email = obj["email"]?.jsonPrimitive?.content
+                ?: obj["emails"]?.jsonArray?.firstOrNull()?.jsonPrimitive?.content
+                ?: ""
+
+            val sub = obj["sub"]?.jsonPrimitive?.content
+                ?: obj["oid"]?.jsonPrimitive?.content
+                ?: ""
+
+            val studentCode = if (email.contains("@")) {
+                email.substringBefore("@")
+            } else {
+                sub.take(8)
+            }
+
+            TecsupUser(
+                id = sub,
+                name = name,
+                email = email,
+                studentCode = studentCode,
+                campus = "Tecsup",
+                career = "Estudiante"
+            )
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    @OptIn(ExperimentalEncodingApi::class)
+    fun getTokenExpirationTimestamp(token: String): Long? {
+        val cleaned = cleanToken(token)
+        val parts = cleaned.split(".")
+        if (parts.size < 2) return null
+        val payload = parts[1]
+        val padded = when (payload.length % 4) {
+            2 -> "$payload=="
+            3 -> "$payload="
+            else -> payload
+        }
+        val decodedString = try {
+            Base64.UrlSafe.decode(padded).decodeToString()
+        } catch (_: Exception) {
+            try {
+                Base64.Default.decode(padded).decodeToString()
+            } catch (_: Exception) {
+                return null
+            }
+        }
+        return try {
+            val json = Json { ignoreUnknownKeys = true; isLenient = true }
+            val obj = json.decodeFromString(JsonObject.serializer(), decodedString)
+            obj["exp"]?.jsonPrimitive?.longOrNull
+        } catch (_: Exception) {
+            null
+        }
     }
 }
