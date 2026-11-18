@@ -31,7 +31,7 @@ import androidx.compose.ui.unit.sp
 import me.joxquin.notivas.plugins.tecsup.session.TecsupSessionState
 import top.yukonga.miuix.kmp.basic.Card as MiuixCard
 import top.yukonga.miuix.kmp.basic.CardDefaults as MiuixCardDefaults
-import top.yukonga.miuix.kmp.basic.PressFeedbackType
+import top.yukonga.miuix.kmp.utils.PressFeedbackType
 import top.yukonga.miuix.kmp.theme.MiuixTheme
 
 enum class PluginThemeMode {

@@ -170,8 +170,12 @@ private fun GradesList(grades: List<TecsupGradeProgress>) {
                                 modifier = Modifier.weight(1f)
                             )
                             val avg = item.currentAverage
+                            val formattedAvg = if (avg != null) {
+                                val rounded = (avg * 10).toInt() / 10.0
+                                rounded.toString()
+                            } else "--"
                             Text(
-                                text = if (avg != null) "%.1f".format(avg) else "--",
+                                text = formattedAvg,
                                 fontSize = 18.sp,
                                 fontWeight = FontWeight.Bold,
                                 color = if (avg != null && avg >= 12.5) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
